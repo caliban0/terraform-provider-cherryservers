@@ -19,6 +19,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"strconv"
+	"strings"
 )
 
 // Ensure provider defined types fully satisfy framework interfaces.
@@ -40,23 +41,21 @@ type ipResource struct {
 
 // ipResourceModel describes the resource data model.
 type ipResourceModel struct {
-	Id              types.String `tfsdk:"id"`
-	ProjectId       types.Int64  `tfsdk:"project_id"`
-	Region          types.String `tfsdk:"region"`
-	TargetId        types.String `tfsdk:"target_id"`
-	TargetHostname  types.String `tfsdk:"target_hostname"`
-	RouteIPID       types.String `tfsdk:"route_ip_id"`
-	DDOSScrubbing   types.Bool   `tfsdk:"ddos_scrubbing"`
-	ARecord         types.String `tfsdk:"a_record"`
-	ARecordActual   types.String `tfsdk:"a_record_actual"`
-	PTRRecord       types.String `tfsdk:"ptr_record"`
-	PTRRecordActual types.String `tfsdk:"ptr_record_actual"`
-	Address         types.String `tfsdk:"address"`
-	AddressFamily   types.Int64  `tfsdk:"address_family"`
-	CIDR            types.String `tfsdk:"cidr"`
-	Gateway         types.String `tfsdk:"gateway"`
-	Type            types.String `tfsdk:"type"`
-	Tags            types.Map    `tfsdk:"tags"`
+	Id             types.String `tfsdk:"id"`
+	ProjectId      types.Int64  `tfsdk:"project_id"`
+	Region         types.String `tfsdk:"region"`
+	TargetId       types.String `tfsdk:"target_id"`
+	TargetHostname types.String `tfsdk:"target_hostname"`
+	RouteIPID      types.String `tfsdk:"route_ip_id"`
+	DDOSScrubbing  types.Bool   `tfsdk:"ddos_scrubbing"`
+	ARecord        types.String `tfsdk:"a_record"`
+	PTRRecord      types.String `tfsdk:"ptr_record"`
+	Address        types.String `tfsdk:"address"`
+	AddressFamily  types.Int64  `tfsdk:"address_family"`
+	CIDR           types.String `tfsdk:"cidr"`
+	Gateway        types.String `tfsdk:"gateway"`
+	Type           types.String `tfsdk:"type"`
+	Tags           types.Map    `tfsdk:"tags"`
 }
 
 func (d *ipResourceModel) populateState(ip cherrygo.IPAddress, ctx context.Context, diags diag.Diagnostics) {
@@ -67,13 +66,23 @@ func (d *ipResourceModel) populateState(ip cherrygo.IPAddress, ctx context.Conte
 	d.TargetHostname = types.StringValue(ip.TargetedTo.Hostname)
 	d.RouteIPID = types.StringValue(ip.RoutedTo.ID)
 	d.DDOSScrubbing = types.BoolValue(ip.DDoSScrubbing)
-	d.ARecordActual = types.StringValue(ip.ARecord)
-	d.PTRRecordActual = types.StringValue(ip.PtrRecord)
 	d.Address = types.StringValue(ip.Address)
 	d.AddressFamily = types.Int64Value(int64(ip.AddressFamily))
 	d.CIDR = types.StringValue(ip.Cidr)
 	d.Gateway = types.StringValue(ip.Gateway)
 	d.Type = types.StringValue(ip.Type)
+
+	// Normalize ptr_record and a_record.
+	d.PTRRecord = types.StringValue(strings.TrimSuffix(ip.PtrRecord, "."))
+	d.ARecord = types.StringValue(strings.TrimSuffix(ip.ARecord, ".cloud.cherryservers.net."))
+
+	if ip.PtrRecord == "" {
+		d.PTRRecord = types.StringNull()
+	}
+
+	if ip.ARecord == "" {
+		d.ARecord = types.StringNull()
+	}
 
 	tags, mapDiag := types.MapValueFrom(ctx, types.StringType, ip.Tags)
 	d.Tags = tags
@@ -169,31 +178,12 @@ func (r *ipResource) Schema(ctx context.Context, req resource.SchemaRequest, res
 				},
 			},
 			"a_record": schema.StringAttribute{
-				Description: "Relative DNS name for the IP address. Resulting FQDN will be '<relative-dns-name>.cloud.cherryservers.net' and must be globally unique.",
+				Description: "Relative DNS name for the IP address. Resulting FQDN will be '<relative-dns-name>.cloud.cherryservers.net.' and must be globally unique.",
 				Optional:    true,
-			},
-			"a_record_actual": schema.StringAttribute{
-				Description: "Relative DNS name for the IP address. Resulting FQDN will be '<relative-dns-name>.cloud.cherryservers.net' and must be globally unique." +
-					"API return value.",
-				Computed: true,
-				PlanModifiers: []planmodifier.String{
-					UseStateIfNoConfigurationChangesAttributePlanModifier([]string{
-						"a_record",
-					}),
-				},
 			},
 			"ptr_record": schema.StringAttribute{
 				Optional:    true,
 				Description: "Reverse DNS name for the IP address.",
-			},
-			"ptr_record_actual": schema.StringAttribute{
-				Description: "Reverse DNS name for the IP address. API return value.",
-				Computed:    true,
-				PlanModifiers: []planmodifier.String{
-					UseStateIfNoConfigurationChangesAttributePlanModifier([]string{
-						"ptr_record",
-					}),
-				},
 			},
 			"address": schema.StringAttribute{
 				Description: "The IP address in canonical format used in the reverse DNS record.",
@@ -283,7 +273,7 @@ func (r *ipResource) Create(ctx context.Context, req resource.CreateRequest, res
 
 	ip, _, err := r.client.IPAddresses.Create(int(data.ProjectId.ValueInt64()), request)
 	if err != nil {
-		resp.Diagnostics.AddError("unable to create a CherryServers IP resource", err.Error())
+		resp.Diagnostics.AddError("unable to create a CherryServers IP resource", "failing on create"+err.Error())
 		return
 	}
 
@@ -291,7 +281,7 @@ func (r *ipResource) Create(ctx context.Context, req resource.CreateRequest, res
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"unable to read a CherryServers ip resource",
-			err.Error(),
+			"failing on read"+err.Error(),
 		)
 		return
 	}
@@ -319,6 +309,10 @@ func (r *ipResource) Read(ctx context.Context, req resource.ReadRequest, resp *r
 	ip, ipGetResp, err := r.client.IPAddresses.Get(data.Id.ValueString(), nil)
 	if err != nil {
 		if is404Error(ipGetResp) {
+			resp.State.RemoveResource(ctx)
+			return
+		}
+		if is403Error(ipGetResp) {
 			resp.State.RemoveResource(ctx)
 			return
 		}

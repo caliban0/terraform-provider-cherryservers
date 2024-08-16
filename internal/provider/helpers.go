@@ -12,6 +12,11 @@ func is404Error(httpResponse *cherrygo.Response) bool {
 	return httpResponse.StatusCode == 404
 }
 
+// is403Error returns true if err is an HTTP 404 error.
+func is403Error(httpResponse *cherrygo.Response) bool {
+	return httpResponse.StatusCode == 403
+}
+
 func ServerHostnameToID(hostname string, projectID int, ServerService cherrygo.ServersService) (int, error) {
 	serversList, err := serverList(projectID, ServerService)
 	for _, s := range serversList {
