@@ -76,8 +76,9 @@ func (d *ipDataSource) Schema(ctx context.Context, req datasource.SchemaRequest,
 				Computed: true,
 			},
 			"ddos_scrubbing": schema.BoolAttribute{
-				Description: "If true, DDOS scrubbing protection will be applied in real-time.",
-				Computed:    true,
+				Description:        "If true, DDOS scrubbing protection will be applied in real-time.",
+				Computed:           true,
+				DeprecationMessage: "Remove this attribute's configuration as it's no longer in use and the attribute will be removed in the next major version of the provider.",
 			},
 			"a_record": schema.StringAttribute{
 				Description: "Relative DNS name for the IP address. Resulting FQDN will be '<relative-dns-name>.cloud.cherryservers.net' and must be globally unique.",
